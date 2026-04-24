@@ -1,34 +1,11 @@
 // MenuBarRingView.swift
 // Apple Watch Activity-style concentric rings for the Icon+ menubar mode.
-// Up to 3 quota stats are shown as filled arcs, outer→inner.
+// Uses Canvas (Core Graphics path drawing) so it renders correctly in the
+// MenuBarExtra label — composited SwiftUI Circles distort in that context.
 
 import SwiftUI
 
-// MARK: - Single ring arc (track + progress)
-
-private struct RingArc: View {
-    let progress: Double   // 0...1
-    let color: Color
-    let diameter: CGFloat
-    let lineWidth: CGFloat
-
-    var body: some View {
-        ZStack {
-            // Dim track
-            Circle()
-                .stroke(color.opacity(0.18), lineWidth: lineWidth)
-            // Filled arc — starts at 12 o'clock, sweeps clockwise
-            Circle()
-                .trim(from: 0, to: CGFloat(min(max(progress, 0), 1.0)))
-                .stroke(style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                .foregroundColor(color)
-                .rotationEffect(.degrees(-90))
-        }
-        .frame(width: diameter, height: diameter)
-    }
-}
-
-// MARK: - Multi-ring icon
+// MARK: - Multi-ring menubar icon (Canvas-based)
 
 struct MenuBarRingView: View {
 
@@ -46,69 +23,136 @@ struct MenuBarRingView: View {
     ]
 
     // ── Layout constants ──
-    private static let outerDiameter: CGFloat = 20
-    private static let lineWidth:     CGFloat = 2.0
-    private static let step:          CGFloat = 2.5   // lineWidth + 0.5 gap
+    private static let canvasSize: CGFloat = 20   // icon bounding box
+    private static let lineWidth:  CGFloat = 2.0
+    private static let step:       CGFloat = 2.5  // radial distance between ring centres
 
-    // Resolved (utilization, color) pairs — only for non-empty, matched labels
-    private var rings: [(utilization: Double, color: Color)] {
+    // Resolved (progress 0-1, color) pairs — only non-empty matched labels
+    private var rings: [(progress: Double, color: Color)] {
         labels.prefix(3).enumerated().compactMap { i, label in
             guard !label.isEmpty,
                   let q = quotas.first(where: { $0.label == label })
             else { return nil }
-            return (utilization: q.utilization,
+            return (progress: min(q.utilization / 100.0, 1.0),
                     color: Self.ringColors[i % Self.ringColors.count])
         }
     }
 
     var body: some View {
-        ZStack {
-            if rings.isEmpty {
-                // Fallback: plain circled-C icon when no stats are configured
-                Image(systemName: "c.circle")
-                    .font(.system(size: 14, weight: .regular))
-                    .foregroundColor(.primary)
-            } else {
-                ForEach(rings.indices, id: \.self) { i in
-                    let diameter = Self.outerDiameter - CGFloat(i) * Self.step * 2
-                    RingArc(
-                        progress: rings[i].utilization / 100.0,
-                        color:    rings[i].color,
-                        diameter: diameter,
-                        lineWidth: Self.lineWidth
-                    )
+        if rings.isEmpty {
+            // Fallback: plain circled-C when nothing is configured
+            Image(systemName: "c.circle")
+                .font(.system(size: 14, weight: .regular))
+        } else {
+            Canvas { ctx, size in
+                let cx = size.width  / 2
+                let cy = size.height / 2
+                let center = CGPoint(x: cx, y: cy)
+
+                for (i, ring) in rings.enumerated() {
+                    // Outer ring uses the full radius; each inner ring steps inward
+                    let radius = (size.width / 2)
+                                 - Self.lineWidth / 2
+                                 - CGFloat(i) * Self.step
+                    guard radius > Self.lineWidth / 2 else { continue }
+
+                    // ── Dim track (full circle) ──
+                    var track = Path()
+                    track.addArc(center: center, radius: radius,
+                                 startAngle: .degrees(0),
+                                 endAngle:   .degrees(360),
+                                 clockwise: false)
+                    ctx.stroke(track,
+                               with: .color(ring.color.opacity(0.22)),
+                               lineWidth: Self.lineWidth)
+
+                    // ── Progress arc (12-o'clock → clockwise) ──
+                    guard ring.progress > 0 else { continue }
+                    var arc = Path()
+                    arc.addArc(center: center, radius: radius,
+                               startAngle: .degrees(-90),
+                               endAngle:   .degrees(-90 + 360.0 * ring.progress),
+                               clockwise: false)
+                    ctx.stroke(arc,
+                               with: .color(ring.color),
+                               style: StrokeStyle(lineWidth: Self.lineWidth,
+                                                  lineCap: .round))
                 }
             }
+            .frame(width: Self.canvasSize, height: Self.canvasSize)
         }
-        .frame(width: Self.outerDiameter, height: Self.outerDiameter)
     }
 }
 
 // MARK: - Settings preview (larger, labeled)
 
+private struct SingleRingArc: View {
+    let progress: Double
+    let color: Color
+    let diameter: CGFloat
+    let lineWidth: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(color.opacity(0.22), lineWidth: lineWidth)
+            Circle()
+                .trim(from: 0, to: CGFloat(min(progress, 1.0)))
+                .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: diameter, height: diameter)
+    }
+}
+
 struct RingSettingsPreview: View {
     let quotas: [UsageQuota]
     let labels: [String]
 
-    var body: some View {
-        HStack(spacing: 12) {
-            MenuBarRingView(quotas: quotas, labels: labels)
-                .scaleEffect(2.2)
-                .frame(width: 48, height: 48)   // enough space for 2.2× scale
+    private static let outerDiameter: CGFloat = 44
+    private static let lineWidth:     CGFloat = 4.5
+    private static let step:          CGFloat = 5.5
 
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(labels.prefix(3).indices, id: \.self) { i in
-                    let label = labels[i]
-                    let util = quotas.first(where: { $0.label == label })?.utilization
+    private var rings: [(label: String, progress: Double, color: Color)] {
+        labels.prefix(3).enumerated().compactMap { i, label in
+            guard !label.isEmpty else { return nil }
+            let util = quotas.first(where: { $0.label == label })?.utilization ?? 0
+            return (label: label,
+                    progress: min(util / 100.0, 1.0),
+                    color: MenuBarRingView.ringColors[i % MenuBarRingView.ringColors.count])
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            // Ring diagram
+            ZStack {
+                if rings.isEmpty {
+                    Image(systemName: "c.circle")
+                        .font(.system(size: 28))
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(rings.indices, id: \.self) { i in
+                        let diam = Self.outerDiameter - CGFloat(i) * Self.step * 2
+                        SingleRingArc(progress: rings[i].progress,
+                                      color:    rings[i].color,
+                                      diameter: max(diam, 4),
+                                      lineWidth: Self.lineWidth)
+                    }
+                }
+            }
+            .frame(width: Self.outerDiameter, height: Self.outerDiameter)
+
+            // Legend
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(0..<3, id: \.self) { i in
                     HStack(spacing: 5) {
                         Circle()
-                            .fill(MenuBarRingView.ringColors[i % MenuBarRingView.ringColors.count])
+                            .fill(MenuBarRingView.ringColors[i])
                             .frame(width: 7, height: 7)
-                        if label.isEmpty {
-                            Text("—")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                        } else {
+                        if i < labels.count && !labels[i].isEmpty {
+                            let label = labels[i]
+                            let util  = quotas.first(where: { $0.label == label })?.utilization
                             Text(label)
                                 .font(.system(size: 11, weight: .medium))
                                 .lineLimit(1)
@@ -118,6 +162,10 @@ struct RingSettingsPreview: View {
                                     .font(.system(size: 11, design: .monospaced))
                                     .foregroundColor(.secondary)
                             }
+                        } else {
+                            Text("—")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
                         }
                     }
                 }
