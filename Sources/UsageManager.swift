@@ -516,10 +516,24 @@ class UsageManager: ObservableObject {
 
     // MARK: - Peak / Off-peak detection
 
-    /// Peak hours: weekdays 5am–11am US Pacific (when most US users are active)
+    /// Peak hours: weekdays 5am–11am US Pacific. Anthropic's throttling window for 5-hour
+    /// session limits — overlap of US morning, European afternoon, and Asia evening demand
+    /// (announced 2026-03-26: https://x.com/trq212/status/2037254607001559305).
     private static let peakTimezone = TimeZone(identifier: "America/Los_Angeles")!
     private static let peakStartHour = 5
     private static let peakEndHour = 11
+
+    /// Human-readable peak window, derived from `peakStartHour` / `peakEndHour` so tooltips
+    /// stay in sync if the policy changes.
+    static var peakHoursDescription: String {
+        "Mon–Fri \(formatHour(peakStartHour))–\(formatHour(peakEndHour)) PT"
+    }
+
+    private static func formatHour(_ hour: Int) -> String {
+        let suffix = hour < 12 ? "am" : "pm"
+        let display = hour == 0 ? 12 : (hour <= 12 ? hour : hour - 12)
+        return "\(display)\(suffix)"
+    }
 
     var isPeakHours: Bool {
         let cal = Calendar.current
