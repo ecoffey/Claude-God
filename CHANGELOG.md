@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.22.3] - 2026-05-28
+
+### Changed
+- **Extra Usage (dollar budget) now shows as a percentage in all menu bar display modes** — Enterprise accounts with no token quotas see their spend/budget % instead of "—". The "All" mode appends `E X%` for accounts that have both token quotas and a dollar budget.
+- **Extra Usage available as a ring option** — appears in the Icon+ Rings picker alongside token quotas.
+- **Usage alerts now cover Extra Usage** — the "Alert when usage is high" toggle and custom alert rules now fire for Extra Usage, just like token quotas.
+
 ## [2.22.2] - 2026-05-26
 
 ### Changed

@@ -187,6 +187,11 @@ struct ExtraUsageData: Decodable {
         guard let cents = monthlyLimit else { return "Unlimited" }
         return String(format: "$%.2f", cents / 100.0)
     }
+
+    var utilization: Double? {
+        guard let cents = usedCredits, let limit = monthlyLimit, limit > 0 else { return nil }
+        return min(cents / limit * 100, 100)
+    }
 }
 
 // MARK: - Static formatters
@@ -416,10 +421,31 @@ class UsageManager: ObservableObject {
         return UsageQuota(label: "Timer", icon: "timer", utilization: pct, resetsAt: resetDate)
     }
 
-    /// All selectable ring options: timer (if available) + live API quotas.
+    /// Synthesized quota for extra usage when enabled and a monthly limit is set.
+    var extraUsageQuota: UsageQuota? {
+        guard let extra = extraUsage,
+              extra.isEnabled,
+              let util = extra.utilization else { return nil }
+        return UsageQuota(
+            label: "Extra Usage",
+            icon: "dollarsign.circle.fill",
+            utilization: util,
+            resetsAt: nil
+        )
+    }
+
+    /// Token quotas + extra usage quota. Single source of truth for alerts and ring options.
+    var allNotifiableQuotas: [UsageQuota] {
+        var result = quotas
+        if let e = extraUsageQuota { result.append(e) }
+        return result
+    }
+
+    /// All selectable ring options: timer (if available) + live API quotas + extra usage.
     var ringQuotaOptions: [UsageQuota] {
         var opts = quotas
         if let t = sessionTimerQuota { opts.insert(t, at: 0) }
+        if let e = extraUsageQuota { opts.append(e) }
         return opts
     }
 
@@ -436,12 +462,14 @@ class UsageManager: ObservableObject {
     // MARK: - Propriétés calculées
 
     var primaryQuota: UsageQuota? {
-        quotas.first(where: { $0.label.contains("Session") }) ?? quotas.first
+        quotas.first(where: { $0.label.contains("Session") })
+            ?? quotas.first
+            ?? extraUsageQuota
     }
 
-    /// The quota with the highest utilization (worst state)
+    /// The quota with the highest utilization (worst state) — includes extra usage.
     private var worstQuota: UsageQuota? {
-        quotas.max(by: { $0.utilization < $1.utilization })
+        allNotifiableQuotas.max(by: { $0.utilization < $1.utilization })
     }
 
     /// Best representation of the weekly quota: prefer the combined "Weekly (all models)",
@@ -467,8 +495,9 @@ class UsageManager: ObservableObject {
             let timer = timeUntilReset == "—" ? "" : " · \(timeUntilReset)"
             return "\(Int(q.utilization))%\(timer)"
         case .allQuotas:
-            if quotas.isEmpty { return "—" }
-            return quotas.map { "\(Int($0.utilization))%" }.joined(separator: " | ")
+            var parts = quotas.map { "\(Int($0.utilization))%" }
+            if let e = extraUsageQuota { parts.append("E \(Int(e.utilization))%") }
+            return parts.isEmpty ? "—" : parts.joined(separator: " | ")
         case .sessionTimerAndWeek:
             guard let session = primaryQuota else { return "—" }
             let timer = timeUntilReset == "—" ? "" : " · \(timeUntilReset)"
@@ -1761,7 +1790,7 @@ class UsageManager: ObservableObject {
         let thresholds = Array(Set([customThreshold, Self.emergencyThreshold])).sorted()
 
         // Build pairs of (quota, threshold) that need action
-        let pairs = quotas.flatMap { quota in
+        let pairs = allNotifiableQuotas.flatMap { quota in
             thresholds.map { threshold in (quota: quota, threshold: threshold, key: "\(quota.label)-\(Int(threshold))") }
         }
 
@@ -1816,7 +1845,7 @@ class UsageManager: ObservableObject {
         var toRearm: [Int] = []
         for i in customAlertRules.indices {
             let rule = customAlertRules[i]
-            guard let quota = quotas.first(where: { $0.label == rule.quotaLabel }) else { continue }
+            guard let quota = allNotifiableQuotas.first(where: { $0.label == rule.quotaLabel }) else { continue }
             if quota.utilization >= rule.threshold && !rule.notified {
                 let content = UNMutableNotificationContent()
                 content.title = "Claude God"

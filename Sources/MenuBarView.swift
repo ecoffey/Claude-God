@@ -458,12 +458,12 @@ struct MenuBarView: View {
                     HStack {
                         SHLabel("Custom Alerts")
                         Spacer()
-                        if !manager.quotas.isEmpty {
+                        if !manager.allNotifiableQuotas.isEmpty {
                             SHButton(label: "Add", icon: "plus", style: .ghost) {
                                 // Pick a quota that doesn't already have a rule at 80%
                                 let existing = Set(manager.customAlertRules.map { "\($0.quotaLabel)-\(Int($0.threshold))" })
-                                let available = manager.quotas.first(where: { !existing.contains("\($0.label)-80") })
-                                let quotaLabel = available?.label ?? manager.quotas.first?.label ?? "Session (5h)"
+                                let available = manager.allNotifiableQuotas.first(where: { !existing.contains("\($0.label)-80") })
+                                let quotaLabel = available?.label ?? manager.allNotifiableQuotas.first?.label ?? "Session (5h)"
                                 manager.customAlertRules.append(AlertRule(quotaLabel: quotaLabel, threshold: 80))
                             }
                         }
